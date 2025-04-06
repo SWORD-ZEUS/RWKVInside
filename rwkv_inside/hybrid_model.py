@@ -80,7 +80,7 @@ class AttentionWrapper(nn.Module):
                 student_hidden_states = self.student_attn(hidden_states)
         self.v_first_state.shared_state.data[self.global_rank].copy_(v_first)
         if self.args.stage != 1:
-            return (student_hidden_states, None)
+            return (student_hidden_states, None, None)
         # student_outputs = self.student_attn(hidden_states)
         with torch.no_grad():
             teacher_outputs = self.teacher_attn(*args, **kwargs)

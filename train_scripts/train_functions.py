@@ -244,9 +244,14 @@ def train_step(model, batch, args, teacher_engine=None, tokenizer=None):
     
     # 5. 非SFT模式的处理
     if args.stage == 2:
+        print("call get_teacher_outputs")
         teacher_logits, teacher_loss = get_teacher_outputs(teacher_engine, input_ids, attention_mask, labels, args)
+        # print(f'teacher_logits {teacher_logits}')
+        # print(f'teacher_loss {teacher_loss}')
+        print("call get_student_outputs")
         student_outputs = get_student_outputs(
             model, args, input_ids, labels, attention_mask)
+        # print(f'student_outputs {student_outputs}')
         loss, kl_loss, student_ce_loss = compute_kl_loss(
             student_outputs, teacher_logits, labels, args,attention_mask=attention_mask)
     elif args.stage == 1:
@@ -277,16 +282,49 @@ def get_student_outputs(model, args, input_ids, labels, attention_mask):
             output_attentions=args.stage==1)
         
     return student_outputs
+
+def register_nan_hooks(model):
+    """为模型的每一层注册钩子函数，检测 NaN 值"""
+    handles = []
+    
+    def hook(module, input, output, name):
+        if isinstance(output, torch.Tensor) and torch.isnan(output).any():
+            print(f"NaN 在模块 {name} 的输出中被检测到")
+        if isinstance(input, tuple):
+            for i, inp in enumerate(input):
+                if isinstance(inp, torch.Tensor) and torch.isnan(inp).any():
+                    print(f"NaN 在模块 {name} 的输入 {i} 中被检测到")
+    
+    for name, module in model.named_modules():
+        handles.append(module.register_forward_hook(lambda mod, inp, out, n=name: hook(mod, inp, out, n)))
+    
+    return handles
+
 @time_function
 def get_teacher_outputs(teacher_model, input_ids, attention_mask, labels, args):
     # device = input_ids.device
     
     # # 将teacher模型移动到GPU
     # teacher_model.to(device)
+    handles = register_nan_hooks(teacher_model)
+    # attention_hooks = check_attention_components(teacher_model)
+    # restore_attention = detailed_attention_hook(teacher_model)
     with torch.no_grad():
         teacher_outputs = teacher_model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=labels, use_cache=False, output_hidden_states=False)
+            input_ids=input_ids, 
+            # attention_mask=attention_mask, 
+            labels=labels, 
+            use_cache=False, 
+            output_hidden_states=False
+        )
+    
+    for handle in handles:
+        handle.remove()
+    # if restore_attention:
+    #     restore_attention()
     teacher_logits = teacher_outputs.logits
+    print(f'teacher_logits {teacher_logits}')
+
     teacher_loss = teacher_outputs.loss
     # 将teacher模型移回CPU
     # teacher_model.to('cpu')
@@ -618,3 +656,146 @@ def configure_optimizer(model, args):
         optimizer = Adam(optim_groups, lr=args.lr_init, betas=args.betas, eps=args.adam_eps)
 
     return optimizer
+
+def check_attention_components(model):
+    """检查注意力机制的各个组件"""
+    # 获取第一层的注意力模块
+    attn_module = model.model.layers[0].self_attn
+    
+    # 检查权重矩阵
+    for name, param in attn_module.named_parameters():
+        if torch.isnan(param).any():
+            print(f"NaN 在注意力权重 {name} 中被检测到")
+            print(f"统计信息: 均值={param.mean().item():.4e}, 最小值={param.min().item():.4e}, 最大值={param.max().item():.4e}")
+        elif torch.isinf(param).any():
+            print(f"Inf 在注意力权重 {name} 中被检测到")
+    
+    # 在前向传播前添加钩子
+    def pre_forward_hook(module, input):
+        if isinstance(input, tuple) and len(input) > 0:
+            if isinstance(input[0], torch.Tensor) and torch.isnan(input[0]).any():
+                print(f"NaN 在注意力模块输入中被检测到")
+                # 打印输入的统计信息
+                print(f"输入统计: 均值={input[0].mean().item():.4e}, 最小值={input[0].min().item():.4e}, 最大值={input[0].max().item():.4e}")
+            elif isinstance(input[0], torch.Tensor) and torch.isinf(input[0]).any():
+                print(f"Inf 在注意力模块输入中被检测到")
+        return None
+    
+    handle = attn_module.register_forward_pre_hook(pre_forward_hook)
+    return handle
+
+def detailed_attention_hook(model):
+    """详细检查注意力计算的各个步骤，特别关注softmax前后的数值"""
+    attn_module = model.model.layers[0].self_attn
+    
+    # 原始的前向传播方法
+    original_forward = attn_module.forward
+    
+    def detailed_forward(*args, **kwargs):
+        # 保存原始输入
+        hidden_states = kwargs.get('hidden_states', args[0] if args else None)
+        print(f"注意力输入形状: {hidden_states.shape}")
+        
+        # 检查 Q, K, V 投影
+        try:
+            q_proj = attn_module.q_proj(hidden_states)
+            print(f"Q 投影统计: 均值={q_proj.mean().item():.4e}, 最小值={q_proj.min().item():.4e}, 最大值={q_proj.max().item():.4e}")
+            
+            k_proj = attn_module.k_proj(hidden_states)
+            print(f"K 投影统计: 均值={k_proj.mean().item():.4e}, 最小值={k_proj.min().item():.4e}, 最大值={k_proj.max().item():.4e}")
+            
+            v_proj = attn_module.v_proj(hidden_states)
+            print(f"V 投影统计: 均值={v_proj.mean().item():.4e}, 最小值={v_proj.min().item():.4e}, 最大值={v_proj.max().item():.4e}")
+        except Exception as e:
+            print(f"检查 QKV 投影时出错: {e}")
+        
+        # 保存原始的softmax函数
+        original_softmax = torch.nn.functional.softmax
+        
+        # 定义新的softmax函数来监控输入输出
+        def monitored_softmax(input, dim=-1, dtype=None):
+            print(f"\n===== Softmax 输入输出监控 =====")
+            print(f"Softmax 输入形状: {input.shape}")
+            print(f"Softmax 输入统计: 均值={input.mean().item():.4e}, 最小值={input.min().item():.4e}, 最大值={input.max().item():.4e}")
+            
+            # 检查是否有极端值
+            has_inf = torch.isinf(input).any().item()
+            has_nan = torch.isnan(input).any().item()
+            if has_inf or has_nan:
+                print(f"警告: Softmax 输入包含 {'Inf' if has_inf else ''} {'NaN' if has_nan else ''}")
+                
+                # 查找极端值的位置
+                if has_inf:
+                    inf_indices = torch.where(torch.isinf(input))
+                    print(f"Inf 值位置示例 (最多5个): {[(inf_indices[0][i].item(), inf_indices[1][i].item(), inf_indices[2][i].item(), inf_indices[3][i].item()) for i in range(min(5, len(inf_indices[0])))]}")
+                
+                if has_nan:
+                    nan_indices = torch.where(torch.isnan(input))
+                    print(f"NaN 值位置示例 (最多5个): {[(nan_indices[0][i].item(), nan_indices[1][i].item(), nan_indices[2][i].item(), nan_indices[3][i].item()) for i in range(min(5, len(nan_indices[0])))]}")
+            
+            # 检查数值范围
+            if input.max().item() > 50:
+                print(f"警告: Softmax 输入存在非常大的值 (>{input.max().item():.2f})，可能导致数值溢出")
+            if input.min().item() < -50:
+                print(f"警告: Softmax 输入存在非常小的值 (<{input.min().item():.2f})，可能导致数值下溢")
+            
+            # 调用原始softmax
+            try:
+                output = original_softmax(input, dim=dim, dtype=dtype)
+                
+                # 检查输出
+                print(f"Softmax 输出统计: 均值={output.mean().item():.4e}, 最小值={output.min().item():.4e}, 最大值={output.max().item():.4e}")
+                
+                # 检查输出是否有NaN或Inf
+                if torch.isnan(output).any() or torch.isinf(output).any():
+                    print(f"警告: Softmax 输出包含 {'Inf' if torch.isinf(output).any() else ''} {'NaN' if torch.isnan(output).any() else ''}")
+                    
+                    # 尝试找出问题所在
+                    print("尝试分析问题原因:")
+                    # 检查是否有极端的注意力分数
+                    if input.abs().max().item() > 1e4:
+                        print(f"  - 注意力分数过大 (最大绝对值: {input.abs().max().item():.2e})")
+                    
+                    # 检查是否有全为-inf的行，这会导致softmax后为NaN
+                    neg_inf_rows = (input == float('-inf')).all(dim=-1).any().item()
+                    if neg_inf_rows:
+                        print(f"  - 存在全为-inf的行，这会导致softmax后为NaN")
+                
+                return output
+            except Exception as e:
+                print(f"Softmax 计算出错: {e}")
+                # 返回输入以避免中断计算
+                return input
+        
+        # 替换softmax函数
+        torch.nn.functional.softmax = monitored_softmax
+        
+        try:
+            # 调用原始前向传播
+            result = original_forward(*args, **kwargs)
+            
+            # 检查输出
+            if isinstance(result, tuple) and len(result) > 0:
+                output = result[0]
+                print(f"注意力输出形状: {output.shape}")
+                print(f"注意力输出统计: 均值={output.mean().item():.4e}, 最小值={output.min().item():.4e}, 最大值={output.max().item():.4e}")
+                
+                # 检查是否有NaN
+                if torch.isnan(output).any():
+                    print("警告: 注意力输出包含NaN值")
+                    # 尝试定位NaN的位置
+                    nan_indices = torch.where(torch.isnan(output))
+                    print(f"NaN值位置示例 (最多5个): {[(nan_indices[0][i].item(), nan_indices[1][i].item(), nan_indices[2][i].item()) for i in range(min(5, len(nan_indices[0])))]}")
+        finally:
+            # 恢复原始softmax函数
+            torch.nn.functional.softmax = original_softmax
+        
+        return result
+    
+    # 替换前向传播方法
+    attn_module.forward = detailed_forward
+    
+    def restore():
+        attn_module.forward = original_forward
+    
+    return restore
