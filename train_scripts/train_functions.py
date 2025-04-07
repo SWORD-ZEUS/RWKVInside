@@ -244,11 +244,11 @@ def train_step(model, batch, args, teacher_engine=None, tokenizer=None):
     
     # 5. 非SFT模式的处理
     if args.stage == 2:
-        print("call get_teacher_outputs")
+        # print("call get_teacher_outputs")
         teacher_logits, teacher_loss = get_teacher_outputs(teacher_engine, input_ids, attention_mask, labels, args)
         # print(f'teacher_logits {teacher_logits}')
         # print(f'teacher_loss {teacher_loss}')
-        print("call get_student_outputs")
+        # print("call get_student_outputs")
         student_outputs = get_student_outputs(
             model, args, input_ids, labels, attention_mask)
         # print(f'student_outputs {student_outputs}')
@@ -323,7 +323,7 @@ def get_teacher_outputs(teacher_model, input_ids, attention_mask, labels, args):
     # if restore_attention:
     #     restore_attention()
     teacher_logits = teacher_outputs.logits
-    print(f'teacher_logits {teacher_logits}')
+    # print(f'teacher_logits {teacher_logits}')
 
     teacher_loss = teacher_outputs.loss
     # 将teacher模型移回CPU
