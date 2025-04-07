@@ -22,6 +22,9 @@ def setup_env():
     else:
         os.environ["RWKV_MY_TESTING"]='x060'
     print(f'RWKV_VERSION is {RWKV_VERSION}')
+
+    # os.environ['NCCL_IB_DISABLE'] ='1'
+    # os.environ['NCCL_SOCKET_IFNAME']= 'eth0'
     
 setup_env()
 
@@ -39,7 +42,6 @@ import time
 import wandb
 from tqdm import tqdm
 from profiler import timer, time_function
-
 
 def create_arg_parser():
     node_rank = int(os.environ.get('NODE_RANK', 0))
@@ -109,6 +111,7 @@ def create_arg_parser():
     parser.add_argument('--deepspeed', action='store_true', help='Enable DeepSpeed')
     parser.add_argument('--deepspeed_config', type=str, default=None, help='Path to DeepSpeed config file')
     parser.add_argument('--deepspeed_stage', type=int, default=2, choices=[0, 1, 2, 3], help='DeepSpeed ZeRO stage')
+    parser.add_argument('--deepspeed_stage_teacher', type=int, default=2, choices=[0, 1, 2, 3], help='DeepSpeed ZeRO stage for teacher_model')
     parser.add_argument('--deepspeed_offload', action='store_true', help='Enable CPU offloading',default=False)
     parser.add_argument('--train_batch_size', type=int, default=None, help='train batch size')
     parser.add_argument('--world_size', type=int, help='world size')
@@ -312,11 +315,12 @@ if __name__ == '__main__':
     # 设置设备和数据类型
     dtype = torch.bfloat16
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # 加载模型和分词器
     transformer_model = AutoModelForCausalLM.from_pretrained(config['Llama']['model_id'],
-                                                            torch_dtype=dtype, device_map='cpu',low_cpu_mem_usage=True)
-    tokenizer = AutoTokenizer.from_pretrained(config['Llama']['model_id'])
+                                                            #  attn_implementation='eager',
+                                                            torch_dtype=dtype, device_map='cpu',low_cpu_mem_usage=True,trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(config['Llama']['model_id'],trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -463,51 +467,81 @@ if __name__ == '__main__':
             with open(args.deepspeed_config, 'r') as f:
                 ds_config = json.load(f)
         else:
+            if args.deepspeed_stage == 3:
             # 否则，根据命令行参数创建配置
-            ds_config = {
-                "distributed_backend": "nccl",
-                "train_batch_size": args.train_batch_size,
-                "bf16": {
-                    "enabled": True
-                },
-                "fp32_reduce_scatter": True,
-                "zero_optimization": {
-                    "stage": args.deepspeed_stage,
-                    "stage3_max_live_parameters": 1e9,
-                    "stage3_max_reuse_distance": 1e9,
-                    "stage3_prefetch_bucket_size": 1e7,
-                    "stage3_param_persistence_threshold": 1e4,
-                    "memory_efficient_linear": True,
-                    "stage3_gather_16bit_weights_on_model_save": False,
-                    "zero_quantized_weights": False,
-                    "zero_hpz_partition_size": args.world_size,
-                    "zero_quantized_gradients": False,
-                    "offload_optimizer": {
-                        "device": "cpu",
-                        "pin_memory": True,
-                        "buffer_count": 4
+                ds_config = {
+                    "distributed_backend": "nccl",
+                    "train_batch_size": args.train_batch_size,
+                    "bf16": {
+                        "enabled": True
                     },
-                    "offload_param": {
-                        "device": "cpu",
-                        "pin_memory": True,
-                        "buffer_count": 5,
-                        "buffer_size": 1e9,
+                    "fp32_reduce_scatter": True,
+                    "zero_optimization": {
+                        "stage": args.deepspeed_stage,
+                        "stage3_max_live_parameters": 1e9,
+                        "stage3_max_reuse_distance": 1e9,
+                        "stage3_prefetch_bucket_size": 1e7,
+                        "stage3_param_persistence_threshold": 1e4,
+                        "memory_efficient_linear": True,
+                        "stage3_gather_16bit_weights_on_model_save": False,
+                        "zero_quantized_weights": False,
+                        "zero_hpz_partition_size": args.world_size,
+                        "zero_quantized_gradients": False,
+                        "offload_optimizer": {
+                            "device": "cpu",
+                            "pin_memory": True,
+                            "buffer_count": 4
+                        },
+                        "offload_param": {
+                            "device": "cpu",
+                            "pin_memory": True,
+                            "buffer_count": 5,
+                            "buffer_size": 1e9,
+                        },
+                        "allgather_partitions": True,
+                        "sub_group_size": 1e8,
+                        # "overlap_comm": True,
+                        "overlap_comm": False,
+                        "reduce_scatter": True,
+                        "reduce_bucket_size": 5e6,
+                        "contiguous_gradients": True
                     },
-                    "allgather_partitions": True,
-                    "sub_group_size": 1e8,
-                    "overlap_comm": True,
-                    "reduce_scatter": True,
-                    "reduce_bucket_size": 5e6,
-                    "contiguous_gradients": True
-                },
-                "gradient_clipping": args.gradient_clip_val,
-                "gradient_checkpointing": args.grad_cp == 1,
-                "zero_force_ds_cpu_initialization": True,
-                "zero_allow_untested_optimizer": True,
-                "gradient_accumulation_steps": args.accumulate_grad_batches if args.accumulate_grad_batches > 1 else None,
-                "wall_clock_breakdown": False,
-                "dump_state": True
-            }
+                    "gradient_clipping": args.gradient_clip_val,
+                    "gradient_checkpointing": args.grad_cp == 1,
+                    "zero_force_ds_cpu_initialization": True,
+                    "zero_allow_untested_optimizer": True,
+                    "gradient_accumulation_steps": args.accumulate_grad_batches if args.accumulate_grad_batches > 1 else None,
+                    "wall_clock_breakdown": False,
+                    "dump_state": True,
+                }
+            elif args.deepspeed_stage == 2:
+                ds_config = {
+                    "distributed_backend": "nccl",
+                    "train_batch_size": args.train_batch_size,
+                    "bf16": {
+                        "enabled": True
+                    },
+                    "zero_optimization": {
+                        "stage": 2,
+                        "offload_optimizer": {
+                            "device": "cpu",
+                            "pin_memory": True,
+                            "buffer_count": 4
+                        },
+                        "memory_efficient_linear": True,
+                        "allgather_partitions": True,
+                        "sub_group_size": 1e8,
+                        "overlap_comm": True,
+                        "reduce_scatter": True,
+                        "reduce_bucket_size": 5e6,
+                        "contiguous_gradients": True
+                    },
+                    "gradient_clipping": args.gradient_clip_val,
+                    "gradient_checkpointing": args.grad_cp == 1,
+                    "zero_force_ds_cpu_initialization": True,
+                    "zero_allow_untested_optimizer": True,
+                    "gradient_accumulation_steps": args.accumulate_grad_batches if args.accumulate_grad_batches > 1 else None,
+                }
         if not args.deepspeed_offload:
             ds_config['zero_optimization']['offload_optimizer'] = None
             ds_config['zero_optimization']['offload_param'] = None
@@ -591,6 +625,7 @@ if __name__ == '__main__':
                     },
                 "scheduler": None,
             }
+            #TODO:这里config是ds_config_state还是ds_config
             state_engine, _, _, _ = deepspeed.initialize(
                 model=vfirst_holder,
                 config=ds_config
@@ -615,34 +650,64 @@ if __name__ == '__main__':
             if args.local_rank == 0:
                 print(f'initializing teacher model')
                 print(f'current gpu memory BEFORE initializing teacher model: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
-            ds_config = {
-                "distributed_backend": "nccl",
-                "train_batch_size": args.train_batch_size,
-                "bf16": {
-                    "enabled": True
-                },
-                "zero_optimization": {
-                    "stage": args.deepspeed_stage,
-                    "stage3_max_live_parameters": 1e9,
-                    "stage3_max_reuse_distance": 1e9,
-                    "stage3_prefetch_bucket_size": 5e6,
-                    "memory_efficient_linear": True,
-                    "stage3_param_persistence_threshold": 1e5,
-                    "offload_param": {
-                        "device": "cpu",
-                        "pin_memory": True,
-                        "buffer_count": 4,
-                        "buffer_size": 1e8
+            if args.deepspeed_stage_teacher == 3:
+                ds_config = {
+                    "distributed_backend": "nccl",
+                    "train_batch_size": args.train_batch_size,
+                    "bf16": {
+                        "enabled": True
                     },
-                    "allgather_partitions": True,
-                    "reduce_scatter": True,
-                    "reduce_bucket_size": 5e6,
-                    "overlap_comm": True,
-                    "contiguous_gradients": True
-                },
-                "zero_force_ds_cpu_initialization": True,
-                "dump_state": True
-            }
+                    "zero_optimization": {
+                        "stage": args.deepspeed_stage,
+                        "stage3_max_live_parameters": 1e9,
+                        "stage3_max_reuse_distance": 1e9,
+                        "stage3_prefetch_bucket_size": 5e6,
+                        "memory_efficient_linear": True,
+                        "stage3_param_persistence_threshold": 1e5,
+                        "offload_param": {
+                            "device": "cpu",
+                            "pin_memory": True,
+                            "buffer_count": 4,
+                            "buffer_size": 1e8
+                        },
+                        "allgather_partitions": True,
+                        "reduce_scatter": True,
+                        "reduce_bucket_size": 5e6,
+                        "overlap_comm": True,
+                        "contiguous_gradients": True
+                    },
+                    "zero_force_ds_cpu_initialization": True,
+                    "dump_state": True
+                }
+            elif args.deepspeed_stage_teacher == 2:
+                ds_config = {
+                    "distributed_backend": "nccl",
+                    "train_batch_size": args.train_batch_size,
+                    "bf16": {
+                        "enabled": True
+                    },
+                    "zero_optimization": {
+                        "stage": 2,
+                        "offload_optimizer": None,
+                        "memory_efficient_linear": True,
+                        "allgather_partitions": True,
+                        "sub_group_size": 1e8,
+                        "overlap_comm": True,
+                        "reduce_scatter": True,
+                        "reduce_bucket_size": 5e6,
+                        "contiguous_gradients": True
+                    },
+                    "zero_force_ds_cpu_initialization": True,
+                    "zero_allow_untested_optimizer": True,
+                    "optimizer": {
+                        "type": "AdamW",
+                        "params": {
+                            "lr": 0,
+                            "betas": [0.9, 0.999],
+                            "eps": 1e-8,
+                        }
+                    }
+                }
             if not args.deepspeed_offload:
                 ds_config['zero_optimization']['offload_param'] = None
             teacher_model_id = args.teacher_model_id
@@ -651,22 +716,26 @@ if __name__ == '__main__':
             print(f'initializing teacher model with id {teacher_model_id}')
             teacher_model = AutoModelForCausalLM.from_pretrained(
                 teacher_model_id,
+                # attn_implementation='eager',
                 torch_dtype=dtype,
                 device_map='cpu',
-                low_cpu_mem_usage=True
+                low_cpu_mem_usage=True,
+                trust_remote_code=True,
             )
             
             teacher_model.eval()
             if args.local_rank == 0:
                 print('freeze teacher_model')
                 print(f'teacher_model is {teacher_model}')
-            for name, param in teacher_model.named_parameters():
-                param.requires_grad = False
+            # for name, param in teacher_model.named_parameters():
+            #     param.requires_grad = False
             # 使用DeepSpeed包装teacher model
             teacher_engine, _, _, _ = deepspeed.initialize(
                 model=teacher_model,
                 config=ds_config
             )
+            for param in teacher_engine.module.parameters():
+                param.requires_grad = False
             if args.local_rank == 0:
                 print(f'current gpu memory AFTER initializing teacher model: {torch.cuda.memory_summary(device=None, abbreviated=False)}')
                 # 将处理好的teacher model设置到model_engine中
@@ -709,7 +778,11 @@ if __name__ == '__main__':
                     "contiguous_gradients": True
                 },
                 "zero_force_ds_cpu_initialization": True,
-                "dump_state": True
+                "dump_state": True,
+                # "logging": {
+                #     "steps_per_print": 1,      # 每步都打印日志
+                #     "wall_clock_breakdown": True  # 输出时间消耗分析
+                # }
             }
             teacher_attn_module_list.requires_grad_(False)
             teacher_engine, _, _, _ = deepspeed.initialize(

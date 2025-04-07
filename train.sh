@@ -1,6 +1,9 @@
 #!/bin/bash
+cd /zhuangkai/projects/RWKVInside
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate base
 NNODES=1
-GPUS_PER_NODE=4
+GPUS_PER_NODE=2
 MICRO_BSZ=1
 ACCUMULATE_GRAD_BATCHES=4
 export RWKV_VERSION=v6
@@ -19,6 +22,7 @@ FULL_PARAMS=""
 STAGE=1
 export WKV=""
 DEEPSTATE_STAGE=3
+DEEPSTATE_STAGE_TEACHER=2
 MAX_TRAINED_TOKENS=100_000_000
 TERMINATE_LOSS=0.01
 WANDB=hybrid_trainer_toys
@@ -29,7 +33,7 @@ TEACHER_MODEL_ID=""
 GATE_FREE=""
 NEED_TO_PAD=""
 MAX_EPOCHES=1
-while getopts "c:o:p:n:m:b:a:l:f:w:k:g:d:F:s:R:W:S:t:T:W:P:r:G:M:z:i:D:e:N:X:" opt; do
+while getopts "c:o:p:n:m:b:a:l:f:w:k:g:d:F:s:R:W:S:t:T:W:P:r:G:M:z:i:D:e:N:X:S_T" opt; do
     case $opt in
         c) CONFIG_FILE="$OPTARG";;
         o) OUTPUT_DIR="$OPTARG";;
@@ -50,6 +54,7 @@ while getopts "c:o:p:n:m:b:a:l:f:w:k:g:d:F:s:R:W:S:t:T:W:P:r:G:M:z:i:D:e:N:X:" o
         R) export RWKV_VERSION="$OPTARG";;
         W) export WKV="$OPTARG";;
         S) DEEPSTATE_STAGE="$OPTARG";;
+        S_T) DEEPSTATE_STAGE_TEACHER="$OPTARG";;
         t) MAX_TRAINED_TOKENS="$OPTARG";;
         T) TERMINATE_LOSS="$OPTARG";;
         P) WANDB_PROJECT="$OPTARG";;
@@ -77,6 +82,7 @@ deepspeed \
     $DEEPSPEED_OFFLOAD \
     $FULL_PARAMS \
     --deepspeed_stage $DEEPSTATE_STAGE \
+    --deepspeed_stage_teacher $DEEPSTATE_STAGE_TEACHER \
     --config_file $CONFIG_FILE \
     --output_dir $OUTPUT_DIR \
     $PREPROCESSED_DATA \
