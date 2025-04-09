@@ -582,49 +582,6 @@ if __name__ == '__main__':
         vfirst_holder = VFirstHolder(args.micro_bsz, args.max_seq_length, args.dim_att,model_engine.world_size)
         vfirst_holder.requires_grad_(False)
         if args.deepspeed_stage == 3:
-            ds_config_state = {
-                "train_batch_size": args.train_batch_size,
-                "bf16": {"enabled": True},
-                "zero_optimization": {
-                    "stage": args.deepspeed_stage,
-                    # 减小缓冲区大小
-                    "stage3_prefetch_bucket_size": 5e5,  # 更小的预取缓冲区
-                    "stage3_param_persistence_threshold": 1e3,  # 更小的参数持久化阈值
-                    "reduce_bucket_size": 5e5,  # 更小的归约缓冲区
-                    
-                    # 最小化内存使用
-                    "memory_efficient_linear": True,
-                    "contiguous_gradients": True,
-                    
-                    # 如果需要 CPU offload，使用最小配置
-                    "offload_param": {
-                        "device": "cpu",
-                        "pin_memory": True,
-                        "buffer_count": 2,  # 减少缓冲区数量
-                        "buffer_size": 1e6,  # 更小的缓冲区大小
-                    },
-                    
-                    # 简化通信设置
-                    "allgather_partitions": True,
-                    "reduce_scatter": True,
-                    "overlap_comm": True,
-                },
-                # 禁用不必要的功能
-                "wall_clock_breakdown": False,
-                "dump_state": False,
-                
-                # 如果状态不需要梯度，可以禁用相关优化
-                "optimizer": None if args.deepspeed_stage == 3 else {
-                        "type": "AdamW",
-                        "params": {
-                            "lr": args.learning_rate,
-                            "betas": [0.9, 0.999],
-                            "eps": 1e-8,
-                            "weight_decay": 0.01
-                        }
-                    },
-                "scheduler": None,
-            }
             #TODO:这里config是ds_config_state还是ds_config
             state_engine, _, _, _ = deepspeed.initialize(
                 model=vfirst_holder,
