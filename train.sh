@@ -33,7 +33,7 @@ TEACHER_MODEL_ID=""
 GATE_FREE=""
 NEED_TO_PAD=""
 MAX_EPOCHES=1
-while getopts "c:o:p:n:m:b:a:l:f:w:k:g:d:F:s:R:W:S:t:T:W:P:r:G:M:z:i:D:e:N:X:S_T" opt; do
+while getopts "c:o:p:n:m:b:a:l:f:w:k:g:d:F:s:R:W:S:t:T:W:P:r:G:M:z:i:D:e:N:X:Z:" opt; do
     case $opt in
         c) CONFIG_FILE="$OPTARG";;
         o) OUTPUT_DIR="$OPTARG";;
@@ -54,7 +54,6 @@ while getopts "c:o:p:n:m:b:a:l:f:w:k:g:d:F:s:R:W:S:t:T:W:P:r:G:M:z:i:D:e:N:X:S_T
         R) export RWKV_VERSION="$OPTARG";;
         W) export WKV="$OPTARG";;
         S) DEEPSTATE_STAGE="$OPTARG";;
-        S_T) DEEPSTATE_STAGE_TEACHER="$OPTARG";;
         t) MAX_TRAINED_TOKENS="$OPTARG";;
         T) TERMINATE_LOSS="$OPTARG";;
         P) WANDB_PROJECT="$OPTARG";;
@@ -66,6 +65,7 @@ while getopts "c:o:p:n:m:b:a:l:f:w:k:g:d:F:s:R:W:S:t:T:W:P:r:G:M:z:i:D:e:N:X:S_T
         e) GATE_FREE="--gate_free";;
         N) NEED_TO_PAD="--need_to_pad";;
         X) MAX_EPOCHES="$OPTARG";;
+        Z) DEEPSTATE_STAGE_TEACHER="$OPTARG";;
         \?) echo "无效的选项 -$OPTARG" >&2; exit 1;;
     esac
 done

@@ -3,7 +3,7 @@ RWKV:
   grad_cp: 1
 
 Llama:
-  model_id: /home/yueyulin/models/Qwen2.5-0.5B-Instruct/
+  model_id: /zhuangkai/data/qwen/Qwen2.5_0.5B_Instruct/
 is_llama_ffn: True
 kl_weight: 1
 ce_weight: 0

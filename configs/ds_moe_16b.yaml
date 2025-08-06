@@ -8,9 +8,7 @@ is_llama_ffn: True
 kl_weight: 1
 ce_weight: 0
 model_file: deepseek_moe_16B
-init_with_llama: False
 is_rwkv_att_only: True
 teach_mode:
   is_client: False
-  is_hidden_align: False
 is_all_labels_kl: True
